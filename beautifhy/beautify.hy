@@ -11,13 +11,9 @@ Here we use 2 spaces for indentation (by default).
 There are a special cases about when not to break to the next line,
 to handle paired `cond`, `let` assignments, etc.
 
-Comments are lost by HySafeReader.
-
-The Hy Expressions (forms) keep information about their original
-position: `f.start-column`, `f.start-line` etc.
-
-Comments are kept by HyReaderWithComments, but this breaks pairing, so
-is disabled pending a solution.
+Comments are kept by HyReaderWithComments and rendered by the Comment
+handler. They are filtered out before pairing logic so they don't break
+cond/let/setv pairing.
 "
 
 ;; TODO : abstract out form pairing or listing from grind(Expression)
@@ -188,32 +184,38 @@ is disabled pending a solution.
     ;; short and paired
     (and pair
          (_is-printable forms :size size))
-    (.join (+ "\n" indent-str)
-           (lfor [a b] (batched forms 2)
-                 (+ (grind a :indent-str (_indent indent-str) :size size)
-                    " "
-                    (grind b :indent-str (_indent indent-str) :size size))))
+    (let [non-comment-forms (list (filter (fn [f] (not (isinstance f Comment)))
+                                          forms))]
+      (.join (+ "\n" indent-str)
+             (lfor [a b] (batched non-comment-forms 2)
+                   (+ (grind a :indent-str (_indent indent-str) :size size)
+                      " "
+                      (grind b :indent-str (_indent indent-str) :size size)))))
 
     ;; long, paired, and the first of each pair is short enough
     (and pair
          (all (map (fn [form] (_is-printable form :size 3))
                    (cut forms 0 None 2))))
     ;; then indent the right-hand objects by the longest of the left-hand ones.
-    (let [instr (* " " (max (map (fn [f] (len (_repr f))) 
-                                (cut forms 0 None 2))))]
+    (let [non-comment-forms (list (filter (fn [f] (not (isinstance f Comment)))
+                                          forms))
+          instr (* " " (max (map (fn [f] (len (_repr f))) 
+                                (cut non-comment-forms 0 None 2))))]
       (.join (+ "\n" indent-str)
-             (lfor [a b] (batched forms 2)
+             (lfor [a b] (batched non-comment-forms 2)
                  (+ (grind a :indent-str (_indent indent-str) :size size)
                     (cut instr (len (_repr a)) None) " "
                     (grind b :indent-str (+ instr (_indent indent-str)) :size size)))))
 
     ;; long and paired
     pair
-    (.join (+ "\n" indent-str)
-           (lfor [a b] (batched forms 2)
-                 (+ (grind a :indent-str (_indent indent-str) :size size)
-                    "\n\n" (_indent indent-str)
-                    (grind b :indent-str (+ "__" (_indent indent-str)) :size size))))
+    (let [non-comment-forms (list (filter (fn [f] (not (isinstance f Comment)))
+                                          forms))]
+      (.join (+ "\n" indent-str)
+             (lfor [a b] (batched non-comment-forms 2)
+                   (+ (grind a :indent-str (_indent indent-str) :size size)
+                      "\n\n" (_indent indent-str)
+                      (grind b :indent-str (+ "__" (_indent indent-str)) :size size)))))
 
     ;; short and not paired - just print
     (_is-printable forms :size size)
@@ -238,7 +240,7 @@ is disabled pending a solution.
   This is probably what you want to use."
   (let [forms (read-many source
                          :skip-shebang True
-                         :reader (HySafeReader :use-current-readers False))]
+                         :reader (HyReaderWithComments :use-current-readers False))]
     (grind forms :size size :source source #** kwargs)))
 
 (defmethod grind [#^ Lazy forms * source #** kwargs]
@@ -330,15 +332,17 @@ is disabled pending a solution.
     ;; Expressions with `cond` as first form should have the following
     ;; forms go in pairs
     (_is-paired (first forms))
-    (+ "(" (first forms) "\n"
-       (_indent indent-str)
-       (.join (+ "\n\n" (_indent indent-str))
-              ;; pair them off
-              (lfor [a b] (batched (rest forms) 2)
-                    (+ (grind a :indent-str (_indent indent-str) :size size)
-                       "\n" (_indent indent-str)
-                       (grind b :indent-str (_indent indent-str) :size size))))
-       ")")
+    (let [non-comment-forms (list (filter (fn [f] (not (isinstance f Comment)))
+                                          (rest forms)))]
+      (+ "(" (first forms) "\n"
+         (_indent indent-str)
+         (.join (+ "\n\n" (_indent indent-str))
+                ;; pair them off
+                (lfor [a b] (batched non-comment-forms 2)
+                      (+ (grind a :indent-str (_indent indent-str) :size size)
+                         "\n" (_indent indent-str)
+                         (grind b :indent-str (_indent indent-str) :size size))))
+         ")"))
 
     ;; All other cases follow default indenting rules.
     :else
